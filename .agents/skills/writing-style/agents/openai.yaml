@@ -1,0 +1,4 @@
+interface:
+  display_name: "Writing Style"
+  short_description: "Write clear, concise engineer-facing prose"
+  default_prompt: "Apply the writing-style skill to draft or revise this engineer-facing document."

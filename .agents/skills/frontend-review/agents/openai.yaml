@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Review"
+  short_description: "Review frontend diffs with subagent passes"
+  default_prompt: "Use $frontend-review to review the current frontend changes and spawn subagents for the repo-policy and reference-rule passes."

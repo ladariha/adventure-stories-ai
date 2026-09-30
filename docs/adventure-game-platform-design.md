@@ -14,7 +14,7 @@ The game world will render with Canvas 2D in a fixed logical coordinate system. 
 
 Game creation will use a two-stage pipeline. First, an agent adapts a story into a reviewable game plan. After approval, an agent resolves reusable assets, generates only what is missing, produces a valid game definition, and runs deterministic validation and automated playthrough checks. Target age and educational intent are required inputs because they affect puzzle structure, scene density, instructions, hints, inventory, and expected memory.
 
-The first release should optimize for reliable completion, touch-friendly play, offline playback, Czech speech, and easy correction of AI-generated scenes. Advanced pathfinding, procedural background composition, semantic embeddings, and multiple portrait-specific layouts can follow later.
+The first release should optimize for reliable completion, touch-friendly play, offline playback, Czech speech, and easy correction of AI-generated scenes. Phase 0 establishes the content contract with a minimal hand-written rabbit game before any renderer or production asset generation is built. Advanced pathfinding, procedural background composition, semantic embeddings, and multiple portrait-specific layouts can follow later.
 
 ## 2. Product Goals
 
@@ -147,10 +147,10 @@ The workflow must support stopping after the planning stage. A user can revise s
 
 ```text
 adventure-stories-ai
-  /src/apps/
+  /apps/
     player/
     scene-editor/
-  /src/packages/
+  /packages/
     engine/
       renderer/
       movement/
@@ -171,25 +171,27 @@ adventure-stories-ai
     asset-catalog/
     test-runner/
     shared/
-  /src/assets/
+  /assets/
     catalog/
     styles/
-  /src/games/
+  /games/
     examples/
-  /src/stories/
-  skills/
-    design-adventure/
-    generate-adventure/
-    resolve-assets/
-    create-game-assets/
-    validate-adventure/
-    test-adventure/
+  /stories/
+  /.agents/
+    skills/
+      design-adventure/
+      generate-adventure/
+      resolve-assets/
+      create-game-assets/
+      validate-adventure/
+      test-adventure/
   tools/
   AGENTS.md
   README.md
+  package.json
 ```
 
-Use a monorepo so the player, editor, schemas, and command-line tools share types while retaining clear package boundaries.
+Use a monorepo pnp so the player, editor, schemas, validators, and command-line tools share types across packages. Phase 0 should establish this layout even though only the schemas, validator, fixtures, and repository guidance are implemented initially.
 
 ## 7. Rendering and Responsive Layout
 
@@ -214,7 +216,7 @@ HTML and CSS render interface elements:
 
 ### 7.2 Logical coordinate system
 
-Every scene uses a stable logical size, initially 1920 by 1080. Content definitions always use logical coordinates. The renderer scales the logical viewport into the available CSS area while accounting for device pixel ratio.
+Every scene uses a stable logical coordinate system with a 16:9 aspect ratio. The default authoring coordinate space is 1920 by 1080, but this is not a required display resolution. Content definitions always use logical coordinates. The renderer scales the logical viewport proportionally into the available CSS area while accounting for device pixel ratio, so the game can run at different screen sizes and remain sharp on high-density displays.
 
 ```ts
 const scale = Math.min(
@@ -234,10 +236,10 @@ client coordinates
 
 The first release uses a 16:9 logical viewport with configurable fit behavior:
 
-- `contain`: show the complete scene with letterboxing
-- `cover`: fill the viewport and crop nonessential edges
+- `contain` (default): show the complete scene with letterboxing when necessary
+- `cover`: fill the viewport and crop only explicitly marked nonessential edges
 
-Safe areas must identify content that may not be cropped. A separate portrait composition is a later capability, not an initial requirement.
+Safe areas must identify content that must remain visible at all supported viewport sizes. A separate portrait composition is a later capability, not an initial requirement.
 
 ### 7.3 Depth
 
@@ -272,6 +274,7 @@ A scene contains:
 - Ambient audio
 - Transitions
 - Optional camera constraints
+- False interaction objects
 
 ### 8.3 Entity
 
@@ -320,6 +323,8 @@ Example:
 
 Hit areas support rectangles, circles, ellipses, polygons, and composites. If absent, the resolver may derive a default from catalog metadata or sprite bounds and expand it using the age profile.
 
+Each scene also has at least four **false interactions**: visible objects that respond to a tap or click but do not advance a puzzle. Their response should be a short, playful Czech line that makes it clear why the attempted use will not work. These objects use ordinary entity hit areas and dialogue references; no special action type is needed. A false interaction must not consume an item, change progress, or imply that the object is required later.
+
 ### 8.4 Conditions and actions
 
 Conditions should be declarative and composable:
@@ -363,6 +368,13 @@ The first release stores one save slot per game in IndexedDB or localStorage. Sa
 
 The player taps or clicks a destination or entity. For an entity interaction, the engine moves the character to its interaction point and then runs the action sequence.
 
+The game supports two navigation options:
+
+- **Within a scene:** the player taps a walkable point or an entity, and the character moves there without changing scenes. For example, the character can walk from a window to a door in a room.
+- **Between scenes:** an authored exit path or doorway takes the character to a specified entry point in another scene. A scene may have multiple exits to different scenes; exits can have conditions when the story requires them. Define return routes where needed so an exit cannot strand the player.
+
+Both options must exist across the game, but an individual scene need not offer both. Opening or ending scenes may have no exit where that fits the story.
+
 Initial navigation:
 
 - Walkable polygons
@@ -388,7 +400,12 @@ All important instructions and story dialogue must have Czech speech for Czech g
 Requirements:
 
 - Stable dialogue identifiers separate text from audio files.
-- A voice manifest defines speaker, locale, voice, text, duration, and file.
+- ElevenLabs is the initial speech provider for prototype and production-quality character voices.
+- Speech is generated during the build/content-production workflow, never at runtime.
+- Generated MP3 or Ogg files are packaged with the game so playback works offline.
+- A provider-independent voice manifest defines speaker, locale, voice ID, text, duration, and file.
+- Use one stable ElevenLabs voice ID per character and preserve the provider voice ID in generation metadata.
+- Give every false interaction a Czech text line and a corresponding Czech speech reference; keep the joke gentle and understandable for the target age.
 - Speech can be replayed.
 - Speech, music, and effects have independent volume controls.
 - Background music ducks during speech.
@@ -455,6 +472,8 @@ Examples for the youngest players:
 - Sound recognition: hear an animal and select it, with a visual replay option.
 
 Tasks should serve the story. A rabbit needing three carrots is preferred to an unrelated counting worksheet.
+
+Count false-interaction objects toward the scene's object-density limit. Keep their hit areas usable without placing them over required targets.
 
 ### 11.2 Difficulty adaptation example
 
@@ -582,6 +601,39 @@ interface AssetGenerator {
 }
 ```
 
+The first speech adapter is ElevenLabs. The adapter is used by content-generation tooling and writes deterministic, versioned files into the game package; the player depends only on the generated manifest and audio files.
+
+Build the ElevenLabs adapter and a TypeScript `audio:generate` command in Phase 2. The command reads approved dialogue entries, generates only missing or changed lines through the ElevenLabs API or SDK, records voice and generation metadata, and saves audio with the game. Supply its API key through a local environment variable or managed secret. The `create-game-assets` skill describes when to run this command and how to review its output; it does not implement the integration. An ElevenLabs MCP connection may help with manual voice previews but is not required by the build workflow.
+
+```ts
+interface SpeechGenerator {
+  generate(request: {
+    dialogueId: string;
+    text: string;
+    language: "cs-CZ";
+    voiceId: string;
+    direction?: string;
+  }): Promise<GeneratedAudio>;
+}
+```
+
+The manifest remains provider-independent so a later provider can be evaluated or substituted without changing game content:
+
+```json
+{
+  "id": "squirrel-intro",
+  "speaker": "squirrel",
+  "text": "Ahoj! Pomůžeš mi najít žalud?",
+  "language": "cs-CZ",
+  "voice": "squirrel-friendly",
+  "provider": "elevenlabs",
+  "direction": "Cheerful, gentle and slightly excited",
+  "file": "audio/cs-CZ/squirrel-intro.ogg"
+}
+```
+
+The initial provider evaluation should compare the same 10–15 Czech lines across candidate voices, including names, numbers, questions, emotional delivery, and words containing `ř`, `ě`, and difficult consonant groups. Select voices based on pronunciation and consistency with native Czech listeners. ElevenLabs commercial use requires a plan that grants the necessary commercial rights; the chosen plan and voice licensing metadata must be recorded with generated assets.
+
 Example manifest request:
 
 ```json
@@ -638,6 +690,8 @@ Runtime debug mode should visualize:
 6. Accessibility validation checks speech coverage, sound alternatives, reduced motion, captions, and color-only tasks.
 7. Build validation checks offline packaging and missing runtime resources.
 
+Once the full game validators exist, check that every scene has at least four false interactions, each with a valid Czech dialogue and speech reference, and that their action sequences do not alter progress or inventory.
+
 Example findings:
 
 ```text
@@ -650,6 +704,13 @@ Hit area is 19 x 24 logical pixels; profile minimum is 96.
 ERROR dialogue:squirrel-intro
 Czech speech file is missing.
 ```
+
+Phase 0 implements the first two layers and the age-profile warning needed to prove the contract:
+
+- Structural validation uses JSON Schema 2020-12 compiled with Ajv.
+- Semantic validation is TypeScript and checks cross-file references, reachability, item lifecycle, dialogue/audio coverage, and selected age-profile constraints.
+- Diagnostics include the source path, JSON path, severity, and a concise repair message.
+- A missing Czech audio reference is an error; an undersized hit area is an age-profile warning unless the target is required and cannot be made accessible.
 
 ### 15.2 Automated playthrough
 
@@ -805,7 +866,14 @@ Exact budgets should be measured during the engine prototype and then promoted t
 
 ## 20. First Example Game
 
-Use a small rabbit adventure as the reference implementation:
+Use a small rabbit adventure as the reference implementation. Phase 0 covers only the first two scenes:
+
+1. Home: Mother gives the rabbit a basket.
+2. Forest path: The rabbit finds an acorn and gives it to the squirrel.
+
+This deliberately small fixture proves dialogue, inventory, entity visibility, conditions, action sequences, a scene transition, a completion condition, and false interactions in both scenes. Use placeholder graphics and pre-generated audio file references; actual asset generation is outside Phase 0.
+
+The later vertical slice expands the same game:
 
 1. Home: Mother gives the rabbit a basket and asks for berries.
 2. Forest path: Help a squirrel find an acorn and receive a rope.
@@ -821,13 +889,15 @@ The same story should have at least two difficulty variants to prove that gamepl
 
 ### Phase 0 Foundation
 
-- Choose monorepo tooling and coding standards.
-- Write initial schemas for game plan, game, scene, entity, action, condition, asset, style, and difficulty profile.
-- Create representative valid and invalid fixtures.
-- Implement schema validation commands.
-- Draft `AGENTS.md` and the first six skills.
+- Establish the repo with `apps/`, `packages/`, `games/`, and `.agents/skills/`.
+- Write deliberately small initial schemas for game plans, games, assets, and difficulty profiles. The first game schema supports one game, one or more scenes, rectangular or circular hit areas, positioned entities with interaction points, inventory items, boolean flags, dialogue references, a completion condition, and the initial condition/action set.
+- Implement an Ajv-based validation CLI with separate structural and TypeScript semantic checks.
+- Create one valid two-scene rabbit fixture with four false interactions per scene, plus deliberately invalid fixtures for a missing entity reference, missing Czech audio, an undersized hit area, and an unobtainable required item.
+- Add placeholder graphics and audio file references only; do not generate production assets in this milestone.
+- Add the initial `AGENTS.md` guidance and the `design-adventure` skill.
+- Add `pnpm validate` and `pnpm test` commands with readable diagnostics.
 
-Exit criterion: an agent can create and validate a plan and a small hand-written game definition without rendering.
+Exit criterion: an agent can create and validate a plan and a small hand-written game definition without rendering, and the valid rabbit fixture passes while each deliberate defect fails or warns as specified.
 
 ### Phase 1 Playable vertical slice
 
@@ -844,6 +914,7 @@ Exit criterion: the rabbit game is playable from start to finish on desktop and 
 - Implement asset schema, index, deterministic search, resolver, and manifests.
 - Define two art styles with reference assets.
 - Integrate one image and one speech adapter behind portable interfaces.
+- Implement the TypeScript ElevenLabs adapter and `audio:generate` command for approved Czech dialogue, with local audio output and reuse of unchanged lines.
 - Enforce search-before-generation and catalog admission rules.
 
 Exit criterion: a second game reuses catalog assets and generates only missing ones.
@@ -886,16 +957,18 @@ These decisions are accepted for the baseline:
 - Straight-line movement with authored walkable areas and waypoints precedes full pathfinding.
 - A scene editor and debug overlays are required, but the editor follows the vertical slice.
 - Agent skills remain portable Markdown workflows backed by repository commands.
+- pnpm is the monorepo tool for the initial implementation.
+- Ajv validates JSON Schema 2020-12 in the content-validation CLI.
+- ElevenLabs is the initial speech-generation provider; generated Czech audio is packaged offline behind a provider-independent manifest.
 
 ## 23. Open Decisions
 
 Resolve these during Phase 0 or the vertical slice:
 
-- Monorepo tool: npm workspaces, pnpm, or another choice.
 - Player framework and bundler.
 - Exact contain versus cover default by device category.
 - IndexedDB versus localStorage for the first save implementation.
-- Audio file format and voice generation provider adapters.
+- Whether MP3 or Ogg should be the default packaged speech format after device testing.
 - Animation representation: sprite sheets, frame atlases, skeletal animation, or a constrained mix.
 - Exact art-style names and initial reference sets.
 - Catalog storage format and index generation.
@@ -915,6 +988,8 @@ A generated game is complete only when:
 - No required item can be permanently lost before use.
 - Puzzle complexity, scene density, targets, and hints satisfy the selected profile or have documented exceptions.
 - Important instructions have speech in the selected language.
+- Every scene has at least four harmless false interactions with playful Czech text and speech.
+- The game supports movement within scenes and authored exits between scenes, with no required route blocked permanently.
 - The visual style is consistent.
 - Existing suitable assets were reused.
 - New generic assets were evaluated for catalog admission.
@@ -925,14 +1000,15 @@ A generated game is complete only when:
 
 ## 25. Recommended First Coding Task
 
-Start with schemas and fixtures before building the renderer. Implement:
+Start with a small Phase 0 contract before building the renderer. Implement:
 
 1. `game-plan.schema.json`
-2. `game.schema.json` with one scene, entity, conditions, and core actions
+2. `game.schema.json` with two scenes, entities, positions, interaction points, conditions, dialogue references, and core actions
 3. `difficulty-profile.schema.json`
-4. `asset.schema.json` and `style.schema.json`
-5. One valid rabbit plan and one minimal valid playable definition
-6. Invalid fixtures for missing references, unreachable requirements, tiny hit areas, and missing speech
-7. `npm run validate` with readable diagnostics
+4. `asset.schema.json`
+5. A pnpm workspace and Ajv-based validation CLI
+6. One valid two-scene rabbit plan and game definition with four false interactions per scene, placeholder graphics, and ElevenLabs-compatible audio manifest entries
+7. Invalid fixtures for missing entity references, missing Czech audio, tiny hit areas, and unobtainable required items
+8. `pnpm validate` and `pnpm test` with readable diagnostics
 
-This creates the contract that the engine, editor, catalog, and agent skills can share and reduces costly rewrites later.
+This creates the exercised contract that the engine, editor, catalog, audio adapter, and agent skills can share and reduces costly rewrites later. The next milestone is a minimal Canvas player that loads this exact `game.json`.
